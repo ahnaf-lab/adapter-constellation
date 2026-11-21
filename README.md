@@ -10,10 +10,12 @@ off a loss number.
 
 This is being built in milestones. Milestone 1 implemented the base model
 everything else sits on top of: a 2-layer character-level transformer with a
-full forward and backward pass written by hand in numpy. The current
-milestone adds LoRA: low-rank `A`/`B` adapters injected per weight matrix,
-with the base model frozen and only the adapters trained by gradient
-descent.
+full forward and backward pass written by hand in numpy. Milestone 2 added
+LoRA: low-rank `A`/`B` adapters injected per weight matrix, with the base
+model frozen and only the adapters trained by gradient descent. The current
+milestone extracts, from each adapter, exactly the data the constellation
+diagram will eventually draw: the singular-value spectrum of its effective
+weight delta.
 
 ## Install
 
@@ -74,6 +76,26 @@ for _ in range(100):
 print(loss)
 ```
 
+Every so often during training, you probably want to look at what an
+adapter's low-rank update actually *is*, rather than just the scalar loss.
+`adapter_constellation/delta.py` turns each adapter into its effective delta
+(`scale * A @ B`) and that delta's singular-value spectrum; `SpectrumTracker`
+hooks into a training loop and records a snapshot every `every_n` steps:
+
+```python
+from adapter_constellation.delta import SpectrumTracker
+
+tracker = SpectrumTracker(lora_model, every_n=10)
+for step in range(1, 101):
+    inputs, targets = get_batches(data, block_size=block_size, batch_size=4, rng=rng)
+    loss, grads = lora_model.loss_and_grad(inputs, targets)
+    lora_sgd_step(lora_model.parameters(), grads, lr=0.5)
+    tracker.maybe_record(step)
+
+# One entry per recorded step; each holds every layer's/target's spectrum.
+print([snapshot["step"] for snapshot in tracker.history])
+```
+
 Run the test suite with:
 
 ```bash
@@ -113,6 +135,21 @@ its automated tests pass; nothing here was hand-verified by eyeballing output.
   `tests/test_lora.py::test_base_weights_are_never_modified_by_training` and
   `::test_training_reduces_loss` check both halves of that: the base stays
   frozen, and the adapter still learns.
+
+- **Delta extraction for inspecting what an adapter learned.**
+  `adapter_constellation/delta.py`'s `adapter_delta` computes an adapter's
+  actual contribution to its weight (`scale * A @ B`), and `delta_svd` runs
+  that through `numpy.linalg.svd` to get its singular-value spectrum --
+  bounded in rank by the adapter's own rank, since `A @ B` can never exceed
+  it. `extract_deltas`/`extract_spectra` do this for every target in every
+  layer of a `LoRATransformer`, and `SpectrumTracker` hooks into a training
+  loop to record a snapshot only every N steps (`is_due`) instead of every
+  step. `tests/test_delta.py::test_delta_svd_matches_numpy_reference` checks
+  the decomposition against numpy's own SVD and reconstructs the original
+  delta from it; `::test_adapter_spectrum_is_rank_bounded_by_adapter_rank`
+  checks that singular values past the adapter's rank are numerically zero.
+  This is the exact data the live constellation diagram will render in a
+  later milestone.
 
 The model is kept behind the `LanguageModel` abstract interface in
 `adapter_constellation/model.py`, so later milestones can add other
