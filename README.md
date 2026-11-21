@@ -15,9 +15,11 @@ LoRA: low-rank `A`/`B` adapters injected per weight matrix, with the base
 model frozen and only the adapters trained by gradient descent. Milestone 3
 extracted, from each adapter, exactly the data the constellation diagram
 will eventually draw: the singular-value spectrum of its effective weight
-delta. The current milestone turns that data into the diagram's actual
-coordinates: a deterministic map from singular values and per-head deltas to
-each star's position and brightness.
+delta. Milestone 4 turned that data into the diagram's actual coordinates: a
+deterministic map from singular values and per-head deltas to each star's
+position and brightness. The current milestone draws that diagram: a
+terminal renderer that redraws the constellation live, in place, as a fixed
+training run proceeds.
 
 ## Install
 
@@ -116,6 +118,25 @@ brightest = max(stars, key=lambda s: s["brightness"])
 print(brightest["layer"], brightest["target"], brightest["kind"], brightest["brightness"])
 ```
 
+To actually watch it happen, `adapter_constellation/render.py` turns a list of
+stars into plain text -- a width x height grid of ASCII glyphs, dimmest to
+brightest, with an optional title line on top -- and
+`adapter_constellation/live.py` drives a training loop that redraws that text
+every few steps:
+
+```bash
+python -m adapter_constellation.live
+```
+
+This trains a fresh LoRA adapter on a fixed built-in corpus with a fixed
+seed, so every run draws the same constellation shape and only brightness
+moves as training proceeds. Resize the terminal or press Ctrl+C to exit (the
+`curses.wrapper` call in `main()` restores the terminal on exit or on error).
+`run_live_training` itself only depends on a `screen` object with
+`erase`/`addstr`/`refresh` -- the same handful of methods a real curses
+window exposes -- so tests drive it with an in-memory recording stand-in and
+never open a real terminal.
+
 Run the test suite with:
 
 ```bash
@@ -188,7 +209,27 @@ its automated tests pass; nothing here was hand-verified by eyeballing output.
   `::test_build_constellation_is_deterministic_for_the_same_model_state` and
   `::test_head_delta_magnitudes_matches_manual_block_norms` check
   reproducibility and the per-head math respectively. This list of stars is
-  exactly what the live terminal diagram will draw in a later milestone.
+  exactly what the live terminal diagram draws, below.
+
+- **Live training loop with a visible result, not just a loss number.**
+  `adapter_constellation/live.py`'s `run_live_training` is the training
+  loop itself -- the same `loss_and_grad`/`lora_sgd_step` pair the earlier
+  milestones exercise, run on a fixed seed and a fixed built-in corpus
+  (`DEFAULT_SEED`, `DEFAULT_CORPUS`) so every run is reproducible -- with one
+  addition: every `every_n` steps it rebuilds the constellation and redraws
+  it. `adapter_constellation/render.py`'s `render_frame`/`rasterize` turn
+  that list of stars into plain text (a character grid, dimmest to
+  brightest glyph, with a step/loss title line), and `draw_frame` writes
+  that text to a screen through a three-method interface
+  (`erase`/`addstr`/`refresh`) matching the subset of `curses` that is
+  actually needed. `main()` is the only place a real terminal
+  (`curses.wrapper`) enters the picture; `tests/test_live.py` drives
+  `run_live_training` with an in-memory recording fake screen instead, and
+  checks both that training still reduces loss
+  (`test_run_live_training_reduces_loss_over_many_steps`) and that frames
+  are drawn exactly on the expected steps
+  (`test_run_live_training_draws_a_frame_exactly_every_every_n_steps`).
+  Run it yourself with `python -m adapter_constellation.live`.
 
 The model is kept behind the `LanguageModel` abstract interface in
 `adapter_constellation/model.py`, so later milestones can add other
