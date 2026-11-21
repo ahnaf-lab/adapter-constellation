@@ -12,10 +12,12 @@ This is being built in milestones. Milestone 1 implemented the base model
 everything else sits on top of: a 2-layer character-level transformer with a
 full forward and backward pass written by hand in numpy. Milestone 2 added
 LoRA: low-rank `A`/`B` adapters injected per weight matrix, with the base
-model frozen and only the adapters trained by gradient descent. The current
-milestone extracts, from each adapter, exactly the data the constellation
-diagram will eventually draw: the singular-value spectrum of its effective
-weight delta.
+model frozen and only the adapters trained by gradient descent. Milestone 3
+extracted, from each adapter, exactly the data the constellation diagram
+will eventually draw: the singular-value spectrum of its effective weight
+delta. The current milestone turns that data into the diagram's actual
+coordinates: a deterministic map from singular values and per-head deltas to
+each star's position and brightness.
 
 ## Install
 
@@ -96,6 +98,24 @@ for step in range(1, 101):
 print([snapshot["step"] for snapshot in tracker.history])
 ```
 
+Finally, `adapter_constellation/constellation.py` turns that same data into
+the diagram's actual geometry: a list of "stars," each with an `(x, y)`
+position in the unit disk and a `brightness` in `[0, 1]`. Every singular
+value gets a star, and every attention projection (`Wq`/`Wk`/`Wv`/`Wo`) also
+gets one star per attention head, sized by how much that head's slice of the
+delta moved. A star's position depends only on its own identity (which
+layer, target, singular value or head) via a hash, never on the trained
+numbers -- so the same adapter shape always draws stars in the same spots,
+and only brightness changes as training proceeds:
+
+```python
+from adapter_constellation.constellation import build_constellation
+
+stars = build_constellation(lora_model, k=4)
+brightest = max(stars, key=lambda s: s["brightness"])
+print(brightest["layer"], brightest["target"], brightest["kind"], brightest["brightness"])
+```
+
 Run the test suite with:
 
 ```bash
@@ -150,6 +170,25 @@ its automated tests pass; nothing here was hand-verified by eyeballing output.
   checks that singular values past the adapter's rank are numerically zero.
   This is the exact data the live constellation diagram will render in a
   later milestone.
+
+- **Constellation mapping from adapter deltas to star geometry.**
+  `adapter_constellation/constellation.py`'s `star_position` hashes a star's
+  identity (`layer`, `target`, `kind`, `index`) into a deterministic point in
+  the unit disk, so the same adapter shape always places its stars the same
+  way regardless of the trained values. `spectrum_stars` turns each
+  adapter's singular-value spectrum into one star per value, and
+  `head_delta_magnitudes`/`head_stars` split an attention projection's delta
+  into per-head blocks (mirroring the head split in `model.py`'s attention)
+  and turn each block's norm into a star; brightness is each magnitude
+  normalized against the brightest star in its own group, so it always lands
+  in `[0, 1]`. `build_constellation` assembles every layer's and target's
+  stars for a `LoRATransformer` in one call.
+  `tests/test_constellation.py::test_star_position_depends_on_identity_not_on_magnitude`
+  checks that position tracks identity and not the trained numbers;
+  `::test_build_constellation_is_deterministic_for_the_same_model_state` and
+  `::test_head_delta_magnitudes_matches_manual_block_norms` check
+  reproducibility and the per-head math respectively. This list of stars is
+  exactly what the live terminal diagram will draw in a later milestone.
 
 The model is kept behind the `LanguageModel` abstract interface in
 `adapter_constellation/model.py`, so later milestones can add other
