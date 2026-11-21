@@ -8,9 +8,12 @@ runs -- so that two fine-tunes on different text produce visibly different
 constellations, and what an adapter learned can be eyeballed instead of read
 off a loss number.
 
-This is being built in milestones. The current milestone implements the base
-model everything else sits on top of: a 2-layer character-level transformer
-with a full forward and backward pass written by hand in numpy.
+This is being built in milestones. Milestone 1 implemented the base model
+everything else sits on top of: a 2-layer character-level transformer with a
+full forward and backward pass written by hand in numpy. The current
+milestone adds LoRA: low-rank `A`/`B` adapters injected per weight matrix,
+with the base model frozen and only the adapters trained by gradient
+descent.
 
 ## Install
 
@@ -52,6 +55,25 @@ sgd_step(model.params, grads, lr=0.1)
 print(loss)
 ```
 
+To fine-tune with LoRA instead of training the full model, wrap a trained
+(or freshly initialized) `TinyTransformer` in a `LoRATransformer`. The base
+weights are read every forward pass but never written; `parameters()` and
+`loss_and_grad()` only ever expose the adapters' `A`/`B` matrices, so
+`lora_sgd_step` can only ever update those:
+
+```python
+from adapter_constellation.lora import lora_sgd_step
+from adapter_constellation.lora_model import LoRATransformer
+
+lora_model = LoRATransformer(model, rank=4, alpha=2.0)
+
+for _ in range(100):
+    inputs, targets = get_batches(data, block_size=block_size, batch_size=4, rng=rng)
+    loss, grads = lora_model.loss_and_grad(inputs, targets)
+    lora_sgd_step(lora_model.parameters(), grads, lr=0.5)
+print(loss)
+```
+
 Run the test suite with:
 
 ```bash
@@ -74,8 +96,23 @@ its automated tests pass; nothing here was hand-verified by eyeballing output.
   gradients through every layer by hand (no autograd library), and
   `sgd_step` applies them. `tests/test_model.py::test_training_reduces_loss`
   is a minimal training loop that checks loss actually goes down.
-  LoRA adapters and the live constellation visualization build on top of
-  this model in later milestones.
+  The live constellation visualization builds on top of this in a later
+  milestone.
+- **LoRA / adapters.** `adapter_constellation/lora.py` implements the
+  low-rank adapter itself: `init_adapter` creates a pair of matrices `A`
+  (random) and `B` (zero), `effective_weight` computes `W + scale * A @ B`,
+  and `adapter_grad` derives `dA`/`dB` from the gradient of that effective
+  weight via the product rule. `adapter_constellation/lora_model.py`'s
+  `LoRATransformer` injects an adapter onto each targeted weight matrix
+  (`Wq`, `Wk`, `Wv`, `Wo`, `W1`, `W2`) in every layer of a `TinyTransformer`,
+  reusing that model's own forward/backward functions unchanged by
+  substituting the effective weight in before calling them. Its
+  `parameters()`/`loss_and_grad()` only ever expose the adapters, so the
+  base model is read during training but structurally cannot be written to;
+  `lora_sgd_step` updates `A`/`B` by gradient descent.
+  `tests/test_lora.py::test_base_weights_are_never_modified_by_training` and
+  `::test_training_reduces_loss` check both halves of that: the base stays
+  frozen, and the adapter still learns.
 
 The model is kept behind the `LanguageModel` abstract interface in
 `adapter_constellation/model.py`, so later milestones can add other
