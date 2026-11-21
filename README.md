@@ -17,9 +17,11 @@ extracted, from each adapter, exactly the data the constellation diagram
 will eventually draw: the singular-value spectrum of its effective weight
 delta. Milestone 4 turned that data into the diagram's actual coordinates: a
 deterministic map from singular values and per-head deltas to each star's
-position and brightness. The current milestone draws that diagram: a
-terminal renderer that redraws the constellation live, in place, as a fixed
-training run proceeds.
+position and brightness. Milestone 5 drew that diagram: a terminal renderer
+that redraws the constellation live, in place, as a fixed training run
+proceeds. The current milestone locks the whole pipeline down with golden
+tests: a fixed seed and a tiny corpus must produce the exact same rendered
+frame, character for character, every time.
 
 ## Install
 
@@ -230,6 +232,22 @@ its automated tests pass; nothing here was hand-verified by eyeballing output.
   are drawn exactly on the expected steps
   (`test_run_live_training_draws_a_frame_exactly_every_every_n_steps`).
   Run it yourself with `python -m adapter_constellation.live`.
+
+- **Golden tests pinning the whole pipeline down to one exact frame.**
+  `tests/test_golden.py` runs dataset prep, model init, LoRA training,
+  delta extraction, constellation mapping, and text rendering end to end on
+  a fixed seed and a small fixed corpus, and checks the result two ways:
+  `test_same_seed_and_corpus_produce_byte_identical_frames_across_runs`
+  builds two completely independent pipelines from scratch and asserts
+  their rendered frames are equal line for line, and
+  `test_frame_matches_golden_fixture` compares the frame against a literal
+  expected string checked into the test file, so a change anywhere in the
+  chain that quietly breaks reproducibility (an unseeded random call, a
+  dict that stops iterating in a stable order, a different float format)
+  fails loudly instead of just making two runs agree with each other.
+  `test_a_different_seed_changes_the_frame` guards against that golden
+  check passing for the wrong reason, by confirming the pipeline is not
+  simply ignoring its seed.
 
 The model is kept behind the `LanguageModel` abstract interface in
 `adapter_constellation/model.py`, so later milestones can add other
